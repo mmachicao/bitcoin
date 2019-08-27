@@ -81,9 +81,9 @@ static const uint64_t RANDOMIZER_ID_LOCALHOSTNONCE = 0xd93e69e2bbfa5735ULL; // S
 //
 // Global state variables
 //
-CCriticalSection cs_mapLocalHost;
-std::map<CNetAddr, LocalServiceInfo> mapLocalHost GUARDED_BY(cs_mapLocalHost);
-static bool vfLimited[NET_MAX] GUARDED_BY(cs_mapLocalHost) = {};
+//CCriticalSection cs_mapLocalHost;
+//std::map<CNetAddr, LocalServiceInfo> mapLocalHost GUARDED_BY(cs_mapLocalHost);
+//static bool vfLimited[NET_MAX] GUARDED_BY(cs_mapLocalHost) = {};
 std::string strSubVersion;
 
 void CConnman::AddOneShot(const std::string& strDest)
@@ -97,6 +97,32 @@ unsigned short GetListenPort()
     return (unsigned short)(gArgs.GetArg("-port", Params().GetDefaultPort()));
 }
 
+// find 'best' local address for a particular peer
+bool LocalHostMap::GetLocal(CService& addr, bool f_listen, const CNetAddr* paddrPeer)
+{
+    if (!f_listen)
+        return false;
+
+    int nBestScore = -1;
+    int nBestReachability = -1;
+    {
+        LOCK(cs_local_host);
+        for (const auto& entry : m_local_host)
+        {
+            int nScore = entry.second.nScore;
+            int nReachability = entry.first.GetReachabilityFrom(paddrPeer);
+            if (nReachability > nBestReachability || (nReachability == nBestReachability && nScore > nBestScore))
+            {
+                addr = CService(entry.first, entry.second.nPort);
+                nBestReachability = nReachability;
+                nBestScore = nScore;
+            }
+        }
+    }
+    return nBestScore >= 0;
+}
+
+/*
 // find 'best' local address for a particular peer
 bool GetLocal(CService& addr, bool f_listen, const CNetAddr* paddrPeer)
 {
@@ -121,6 +147,7 @@ bool GetLocal(CService& addr, bool f_listen, const CNetAddr* paddrPeer)
     }
     return nBestScore >= 0;
 }
+*/
 
 //! Convert the pnSeed6 array into usable address objects.
 static std::vector<CAddress> convertSeed6(const std::vector<SeedSpec6> &vSeedsIn)
@@ -143,6 +170,28 @@ static std::vector<CAddress> convertSeed6(const std::vector<SeedSpec6> &vSeedsIn
     return vSeedsOut;
 }
 
+
+CAddress CConnman::GetLocalAddress(const CNetAddr* paddrPeer, ServiceFlags nLocalServices)
+{
+  return m_hostmap->GetLocalAddress(paddrPeer,nLocalServices,m_f_listen);
+}
+
+// get best local address for a particular peer as a CAddress
+// Otherwise, return the unroutable 0.0.0.0 but filled in with
+// the normal parameters, since the IP may be changed to a useful
+// one by discovery.
+CAddress LocalHostMap::GetLocalAddress(const CNetAddr* paddrPeer, ServiceFlags nLocalServices, bool f_listen)
+{
+    CAddress ret(CService(CNetAddr(),GetListenPort()), nLocalServices);
+    CService addr;
+    if (GetLocal(addr, f_listen, paddrPeer)) {
+        ret = CAddress(addr, nLocalServices);
+    }
+    ret.nTime = GetAdjustedTime();
+    return ret;
+}
+
+/*
 // get best local address for a particular peer as a CAddress
 // Otherwise, return the unroutable 0.0.0.0 but filled in with
 // the normal parameters, since the IP may be changed to a useful
@@ -157,14 +206,62 @@ CAddress GetLocalAddress(const CNetAddr* paddrPeer, ServiceFlags nLocalServices,
     ret.nTime = GetAdjustedTime();
     return ret;
 }
+*/
+std::vector<std::pair<const CNetAddr, LocalServiceInfo>> CConnman::GetLocalAddresses()
+{
+  return m_hostmap->GetLocalAddresses();
+}
 
+
+std::vector<std::pair<const CNetAddr, LocalServiceInfo>> LocalHostMap::GetLocalAddresses()
+{
+  std::vector<std::pair<const CNetAddr, LocalServiceInfo>> addresses;
+  
+  LOCK(cs_local_host);
+  for (const std::pair<const CNetAddr, LocalServiceInfo> &item : m_local_host)
+    {
+      CNetAddr addr(item.first);
+      LocalServiceInfo lsi(item.second);
+      std::pair<const CNetAddr, LocalServiceInfo> pair(addr,lsi);
+      addresses.push_back(pair);
+    }
+  
+  return addresses;
+}
+
+
+int LocalHostMap::GetnScore(const CService& addr)
+{
+    LOCK(cs_local_host);
+    if (m_local_host.count(addr) == 0) return 0;
+    return m_local_host[addr].nScore;
+}
+
+
+/*
 static int GetnScore(const CService& addr)
 {
     LOCK(cs_mapLocalHost);
     if (mapLocalHost.count(addr) == 0) return 0;
     return mapLocalHost[addr].nScore;
 }
+*/
 
+bool CConnman::IsPeerAddrLocalGood(CNode* pnode)
+{
+  return m_hostmap->IsPeerAddrLocalGood(pnode,m_f_discover);
+}
+
+
+// Is our peer's addrLocal potentially useful as an external IP source?
+bool LocalHostMap::IsPeerAddrLocalGood(CNode* pnode, bool f_discover)
+{
+    CService addrLocal = pnode->GetAddrLocal();
+    return f_discover && pnode->addr.IsRoutable() && addrLocal.IsRoutable() &&
+           IsReachable(addrLocal.GetNetwork());
+}
+
+/*
 // Is our peer's addrLocal potentially useful as an external IP source?
 bool IsPeerAddrLocalGood(CNode* pnode, bool f_discover)
 {
@@ -172,7 +269,44 @@ bool IsPeerAddrLocalGood(CNode* pnode, bool f_discover)
     return f_discover && pnode->addr.IsRoutable() && addrLocal.IsRoutable() &&
            IsReachable(addrLocal.GetNetwork());
 }
+*/
 
+void CConnman::AdvertiseLocal(CNode* pnode)
+{
+  return m_hostmap->AdvertiseLocal(pnode,m_f_discover,m_f_listen);
+}
+  
+
+
+// pushes our own address to a peer
+void LocalHostMap::AdvertiseLocal(CNode* pnode, bool f_discover, bool f_listen)
+{
+    if (f_listen && pnode->fSuccessfullyConnected) {
+        CAddress addrLocal = GetLocalAddress(&pnode->addr, pnode->GetLocalServices(), f_listen);
+        if (gArgs.GetBoolArg("-addrmantest", false))
+        {
+            // use IPv4 loopback during addrmantest
+            addrLocal = CAddress(CService(LookupNumeric("127.0.0.1", GetListenPort())), pnode->GetLocalServices(\
+));
+        }
+        // If discovery is enabled, sometimes give our peer the address it
+        // tells us that it sees us as in case it has a better idea of our
+        // address than we do.
+        FastRandomContext rng;
+        if (IsPeerAddrLocalGood(pnode, f_discover) && (!addrLocal.IsRoutable() ||
+            rng.randbits((GetnScore(addrLocal) > LOCAL_MANUAL) ? 3 : 1) == 0))
+        {
+            addrLocal.SetIP(pnode->GetAddrLocal());
+        }
+        if (addrLocal.IsRoutable() || gArgs.GetBoolArg("-addrmantest", false))
+        {
+            LogPrint(BCLog::NET, "AdvertiseLocal: advertising address %s\n", addrLocal.ToString());
+            pnode->PushAddress(addrLocal, rng);
+        }
+    }
+}
+
+/*
 // pushes our own address to a peer
 void AdvertiseLocal(CNode* pnode, bool f_discover, bool f_listen)
 {
@@ -199,7 +333,9 @@ void AdvertiseLocal(CNode* pnode, bool f_discover, bool f_listen)
         }
     }
 }
+*/
 
+ /*
 // learn a new local address
 bool AddLocal(const CService& addr, bool f_discover, int nScore)
 {
@@ -226,19 +362,67 @@ bool AddLocal(const CService& addr, bool f_discover, int nScore)
 
     return true;
 }
+ */
+ 
 
+// learn a new local address
+bool LocalHostMap::AddLocal(const CService& addr, bool f_discover, int nScore)
+{
+    if (!addr.IsRoutable())
+        return false;
+
+    if (!f_discover && nScore < LOCAL_MANUAL)
+        return false;
+
+    if (!IsReachable(addr))
+        return false;
+
+    LogPrintf("AddLocal(%s,%i,%d)\n", addr.ToString(), nScore, f_discover);
+
+    {
+        LOCK(cs_local_host);
+        bool fAlready = m_local_host.count(addr) > 0;
+        LocalServiceInfo &info = m_local_host[addr];
+        if (!fAlready || nScore >= info.nScore) {
+            info.nScore = nScore + (fAlready ? 1 : 0);
+            info.nPort = addr.GetPort();
+        }
+    }
+
+    return true;
+}
+
+
+/*
 bool AddLocal(const CNetAddr& addr, bool f_discover, int nScore)
 {
     return AddLocal(CService(addr, GetListenPort()), f_discover, nScore);
 }
+*/
 
+bool LocalHostMap::AddLocal(const CNetAddr& addr, bool f_discover, int nScore)
+{
+    return AddLocal(CService(addr, GetListenPort()), f_discover, nScore);
+}
+
+/*
 void RemoveLocal(const CService& addr)
 {
     LOCK(cs_mapLocalHost);
     LogPrintf("RemoveLocal(%s)\n", addr.ToString());
     mapLocalHost.erase(addr);
 }
+*/
 
+void LocalHostMap::RemoveLocal(const CService& addr)
+{
+    LOCK(cs_local_host);
+    LogPrintf("RemoveLocal(%s)\n", addr.ToString());
+    m_local_host.erase(addr);
+}
+
+
+/*
 void SetReachable(enum Network net, bool reachable)
 {
     if (net == NET_UNROUTABLE || net == NET_INTERNAL)
@@ -246,19 +430,60 @@ void SetReachable(enum Network net, bool reachable)
     LOCK(cs_mapLocalHost);
     vfLimited[net] = !reachable;
 }
+*/
 
+void LocalHostMap::SetReachable(enum Network net, bool reachable)
+{
+    if (net == NET_UNROUTABLE || net == NET_INTERNAL)
+        return;
+    LOCK(cs_local_host);
+    m_f_limited[net] = !reachable;
+}
+
+
+/*
 bool IsReachable(enum Network net)
 {
     LOCK(cs_mapLocalHost);
     return !vfLimited[net];
 }
+*/
 
+bool CConnman::IsReachable(enum Network net)
+{
+  return m_hostmap->IsReachable(net);
+}
+
+bool LocalHostMap::IsReachable(enum Network net)
+{
+    LOCK(cs_local_host);
+    return !m_f_limited[net];
+}
+
+
+/*
 bool IsReachable(const CNetAddr &addr)
 {
     return IsReachable(addr.GetNetwork());
 }
+*/
+
+
+bool CConnman::IsReachable(const CNetAddr &addr)
+{
+  return IsReachable(addr.GetNetwork());
+}
+  
+
+bool LocalHostMap::IsReachable(const CNetAddr &addr)
+{
+    return IsReachable(addr.GetNetwork());
+}
+
+
 
 /** vote for a local address */
+/*
 bool SeenLocal(const CService& addr)
 {
     {
@@ -269,13 +494,40 @@ bool SeenLocal(const CService& addr)
     }
     return true;
 }
+*/
 
+bool CConnman::SeenLocal(const CService& addr)
+{
+  return m_hostmap->SeenLocal(addr);
+}
+
+
+/** vote for a local address */
+bool LocalHostMap::SeenLocal(const CService& addr)
+{
+    {
+        LOCK(cs_local_host);
+        if (m_local_host.count(addr) == 0)
+            return false;
+        m_local_host[addr].nScore++;
+    }
+    return true;
+}
 
 /** check whether a given address is potentially local */
+/*
 bool IsLocal(const CService& addr)
 {
     LOCK(cs_mapLocalHost);
     return mapLocalHost.count(addr) > 0;
+}
+*/
+
+/** check whether a given address is potentially local */
+bool LocalHostMap::IsLocal(const CService& addr)
+{
+    LOCK(cs_local_host);
+    return m_local_host.count(addr) > 0;
 }
 
 CNode* CConnman::FindNode(const CNetAddr& ip)
@@ -351,7 +603,7 @@ static CAddress GetBindAddress(SOCKET sock)
 CNode* CConnman::ConnectNode(CAddress addrConnect, const char *pszDest, bool fCountFailure, bool manual_connection)
 {
     if (pszDest == nullptr) {
-        if (IsLocal(addrConnect))
+        if (m_hostmap->IsLocal(addrConnect))
             return nullptr;
 
         // Look for an existing connection
@@ -1429,7 +1681,7 @@ static void ThreadMapPort()
                     CNetAddr resolved;
                     if (LookupHost(externalIPAddress, resolved, false)) {
                         LogPrintf("UPnP: ExternalIPAddress = %s\n", resolved.ToString().c_str());
-                        AddLocal(resolved, f_discover, LOCAL_UPNP);
+                        g_hostmap->AddLocal(resolved, f_discover, LOCAL_UPNP);
                     }
                 } else {
                     LogPrintf("UPnP: GetExternalIPAddress failed.\n");
@@ -1756,7 +2008,7 @@ void CConnman::ThreadOpenConnections(const std::vector<std::string> connect)
             }
 
             // if we selected an invalid or local address, restart
-            if (!addr.IsValid() || IsLocal(addr)) {
+            if (!addr.IsValid() || m_hostmap->IsLocal(addr)) {
                 break;
             }
 
@@ -1767,7 +2019,7 @@ void CConnman::ThreadOpenConnections(const std::vector<std::string> connect)
             if (nTries > 100)
                 break;
 
-            if (!IsReachable(addr))
+            if (! m_hostmap->IsReachable(addr))
                 continue;
 
             // only consider very recently tried nodes after 30 failed attempts
@@ -1900,7 +2152,7 @@ void CConnman::OpenNetworkConnection(const CAddress& addrConnect, bool fCountFai
         return;
     }
     if (!pszDest) {
-        if (IsLocal(addrConnect) ||
+        if ( m_hostmap->IsLocal(addrConnect) ||
             FindNode(static_cast<CNetAddr>(addrConnect)) || (m_banman && m_banman->IsBanned(addrConnect)) ||
             FindNode(addrConnect.ToStringIPPort()))
             return;
@@ -2045,14 +2297,14 @@ bool CConnman::BindListenPort(const CService &addrBind, std::string& strError, b
     vhListenSocket.push_back(ListenSocket(hListenSocket, fWhitelisted));
 
     if (addrBind.IsRoutable() && m_f_discover && !fWhitelisted)
-        AddLocal(addrBind, m_f_discover, LOCAL_BIND);
+         m_hostmap->AddLocal(addrBind, m_f_discover, LOCAL_BIND);
 
     return true;
 }
 
-void Discover()
+void Discover(LocalHostMap* hostmap, bool f_discover)
 {
-    bool f_discover = gArgs.GetBoolArg("-discover", true);
+  //bool f_discover = gArgs.GetBoolArg("-discover", true);
 
     if (!f_discover)
         return;
@@ -2087,14 +2339,14 @@ void Discover()
             {
                 struct sockaddr_in* s4 = (struct sockaddr_in*)(ifa->ifa_addr);
                 CNetAddr addr(s4->sin_addr);
-                if (AddLocal(addr, f_discover, LOCAL_IF))
+                if (hostmap->AddLocal(addr, f_discover, LOCAL_IF))
                     LogPrintf("%s: IPv4 %s: %s\n", __func__, ifa->ifa_name, addr.ToString());
             }
             else if (ifa->ifa_addr->sa_family == AF_INET6)
             {
                 struct sockaddr_in6* s6 = (struct sockaddr_in6*)(ifa->ifa_addr);
                 CNetAddr addr(s6->sin6_addr);
-                if (AddLocal(addr, f_discover, LOCAL_IF))
+                if (hostmap->AddLocal(addr, f_discover, LOCAL_IF))
                     LogPrintf("%s: IPv6 %s: %s\n", __func__, ifa->ifa_name, addr.ToString());
             }
         }
@@ -2131,7 +2383,7 @@ NodeId CConnman::GetNewNodeId()
 
 
 bool CConnman::Bind(const CService &addr, unsigned int flags) {
-    if (!(flags & BF_EXPLICIT) && !IsReachable(addr))
+    if (!(flags & BF_EXPLICIT) && ! m_hostmap->IsReachable(addr))
         return false;
     std::string strError;
     if (!BindListenPort(addr, strError, (flags & BF_WHITELIST) != 0)) {

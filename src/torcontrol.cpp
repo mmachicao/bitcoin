@@ -410,7 +410,7 @@ static bool WriteBinaryFile(const fs::path &filename, const std::string &data)
 class TorController
 {
 public:
-    TorController(struct event_base* base, const std::string& target, bool f_discover);
+  TorController(struct event_base* base, const std::string& target, LocalHostMap* _hostmap,  bool _f_discover);
     ~TorController();
 
     /** Get name of file to store private key in */
@@ -428,7 +428,11 @@ private:
     struct event *reconnect_ev;
     float reconnect_timeout;
     CService service;
-    const bool m_f_discover;
+
+  LocalHostMap* m_hostmap;
+
+      const bool m_f_discover;
+  
     /** Cookie for SAFECOOKIE auth */
     std::vector<uint8_t> cookie;
     /** ClientNonce for SAFECOOKIE auth */
@@ -451,9 +455,9 @@ private:
     static void reconnect_cb(evutil_socket_t fd, short what, void *arg);
 };
 
-TorController::TorController(struct event_base* _base, const std::string& _target, bool _f_discover) :
+TorController::TorController(struct event_base* _base, const std::string& _target, LocalHostMap* _hostmap,  bool _f_discover) :
     base(_base),target(_target), conn(base), reconnect(true), reconnect_ev(0),
-    reconnect_timeout(RECONNECT_TIMEOUT_START),m_f_discover(_f_discover)
+    reconnect_timeout(RECONNECT_TIMEOUT_START), m_hostmap(_hostmap), m_f_discover(_f_discover)
 {
     reconnect_ev = event_new(base, -1, 0, reconnect_cb, this);
     if (!reconnect_ev)
@@ -478,7 +482,7 @@ TorController::~TorController()
         reconnect_ev = nullptr;
     }
     if (service.IsValid()) {
-        RemoveLocal(service);
+        m_hostmap->RemoveLocal(service);
     }
 }
 
@@ -508,7 +512,7 @@ void TorController::add_onion_cb(TorControlConnection& _conn, const TorControlRe
         } else {
             LogPrintf("tor: Error writing service private key to %s\n", GetPrivateKeyFile().string());
         }
-        AddLocal(service, m_f_discover, LOCAL_MANUAL);
+        m_hostmap->AddLocal(service, m_f_discover, LOCAL_MANUAL);
         // ... onion requested - keep connection open
     } else if (reply.code == 510) { // 510 Unrecognized command
         LogPrintf("tor: Add onion failed with unrecognized command (You probably need to upgrade Tor)\n");
@@ -528,7 +532,7 @@ void TorController::auth_cb(TorControlConnection& _conn, const TorControlReply& 
             CService resolved(LookupNumeric("127.0.0.1", 9050));
             proxyType addrOnion = proxyType(resolved, true);
             SetProxy(NET_ONION, addrOnion);
-            SetReachable(NET_ONION, true);
+            m_hostmap->SetReachable(NET_ONION, true);
         }
 
         // Finally - now create the service
@@ -691,7 +695,7 @@ void TorController::disconnected_cb(TorControlConnection& _conn)
 {
     // Stop advertising service when disconnected
     if (service.IsValid())
-        RemoveLocal(service);
+        m_hostmap->RemoveLocal(service);
     service = CService();
     if (!reconnect)
         return;
@@ -733,7 +737,7 @@ static std::thread torControlThread;
 
 static void TorControlThread()
 {
-    TorController ctrl(gBase, gArgs.GetArg("-torcontrol", DEFAULT_TOR_CONTROL), gArgs.GetBoolArg("-discover", true));
+  TorController ctrl(gBase, gArgs.GetArg("-torcontrol", DEFAULT_TOR_CONTROL), g_hostmap.get(), gArgs.GetBoolArg("-discover", true));
 
     event_base_dispatch(gBase);
 }

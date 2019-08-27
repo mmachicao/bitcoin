@@ -84,6 +84,7 @@ static const bool DEFAULT_STOPAFTERBLOCKIMPORT = false;
 // Dump addresses to banlist.dat every 15 minutes (900s)
 static constexpr int DUMP_BANS_INTERVAL = 60 * 15;
 
+std::unique_ptr<LocalHostMap> g_hostmap;
 std::unique_ptr<CConnman> g_connman;
 std::unique_ptr<PeerLogicValidation> peerLogic;
 std::unique_ptr<BanMan> g_banman;
@@ -1309,6 +1310,10 @@ bool AppInitMain(InitInterfaces& interfaces)
     // is not yet setup and may end up being set up twice if we
     // need to reindex later.
 
+    assert(!g_hostmap);
+    g_hostmap = std::unique_ptr<LocalHostMap>(new LocalHostMap());
+
+ 
     assert(!g_banman);
     g_banman = MakeUnique<BanMan>(GetDataDir() / "banlist.dat", &uiInterface, gArgs.GetArg("-bantime", DEFAULT_MISBEHAVING_BANTIME));
     assert(!g_connman);
@@ -1341,7 +1346,7 @@ bool AppInitMain(InitInterfaces& interfaces)
         for (int n = 0; n < NET_MAX; n++) {
             enum Network net = (enum Network)n;
             if (!nets.count(net))
-                SetReachable(net, false);
+                g_hostmap->SetReachable(net, false);
         }
     }
 
@@ -1352,7 +1357,7 @@ bool AppInitMain(InitInterfaces& interfaces)
     // -proxy sets a proxy for all outgoing network traffic
     // -noproxy (or -proxy=0) as well as the empty string can be used to not set a proxy, this is the default
     std::string proxyArg = gArgs.GetArg("-proxy", "");
-    SetReachable(NET_ONION, false);
+    g_hostmap->SetReachable(NET_ONION, false);
     if (proxyArg != "" && proxyArg != "0") {
         CService proxyAddr;
         if (!Lookup(proxyArg.c_str(), proxyAddr, 9050, fNameLookup)) {
@@ -1367,7 +1372,7 @@ bool AppInitMain(InitInterfaces& interfaces)
         SetProxy(NET_IPV6, addrProxy);
         SetProxy(NET_ONION, addrProxy);
         SetNameProxy(addrProxy);
-        SetReachable(NET_ONION, true); // by default, -proxy sets onion as reachable, unless -noonion later
+        g_hostmap->SetReachable(NET_ONION, true); // by default, -proxy sets onion as reachable, unless -noonion later
     }
 
     // -onion can be used to set only a proxy for .onion, or override normal proxy for .onion addresses
@@ -1376,7 +1381,7 @@ bool AppInitMain(InitInterfaces& interfaces)
     std::string onionArg = gArgs.GetArg("-onion", "");
     if (onionArg != "") {
         if (onionArg == "0") { // Handle -noonion/-onion=0
-            SetReachable(NET_ONION, false);
+            g_hostmap->SetReachable(NET_ONION, false);
         } else {
             CService onionProxy;
             if (!Lookup(onionArg.c_str(), onionProxy, 9050, fNameLookup)) {
@@ -1386,7 +1391,7 @@ bool AppInitMain(InitInterfaces& interfaces)
             if (!addrOnion.IsValid())
                 return InitError(strprintf(_("Invalid -onion address or hostname: '%s'").translated, onionArg));
             SetProxy(NET_ONION, addrOnion);
-            SetReachable(NET_ONION, true);
+            g_hostmap->SetReachable(NET_ONION, true);
         }
     }
 
@@ -1398,7 +1403,7 @@ bool AppInitMain(InitInterfaces& interfaces)
     for (const std::string& strAddr : gArgs.GetArgs("-externalip")) {
         CService addrLocal;
         if (Lookup(strAddr.c_str(), addrLocal, GetListenPort(), fNameLookup) && addrLocal.IsValid())
-            AddLocal(addrLocal, f_discover, LOCAL_MANUAL);
+            g_hostmap->AddLocal(addrLocal, f_discover, LOCAL_MANUAL);
         else
             return InitError(ResolveErrMsg("externalip", strAddr));
     }
@@ -1742,7 +1747,7 @@ bool AppInitMain(InitInterfaces& interfaces)
     if (gArgs.GetBoolArg("-listenonion", DEFAULT_LISTEN_ONION))
         StartTorControl();
 
-    Discover();
+    Discover(g_hostmap.get(),f_discover);
 
     // Map ports with UPnP
     if (gArgs.GetBoolArg("-upnp", DEFAULT_UPNP)) {
@@ -1758,6 +1763,7 @@ bool AppInitMain(InitInterfaces& interfaces)
     connOptions.nBestHeight = chain_active_height;
     connOptions.uiInterface = &uiInterface;
     connOptions.m_banman = g_banman.get();
+    connOptions.m_hostmap = g_hostmap.get();
     connOptions.m_msgproc = peerLogic.get();
     connOptions.nSendBufferMaxSize = 1000*gArgs.GetArg("-maxsendbuffer", DEFAULT_MAXSENDBUFFER);
     connOptions.nReceiveFloodSize = 1000*gArgs.GetArg("-maxreceivebuffer", DEFAULT_MAXRECEIVEBUFFER);

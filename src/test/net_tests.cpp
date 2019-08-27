@@ -193,9 +193,13 @@ BOOST_AUTO_TEST_CASE(cnode_simple_test)
 // prior to PR #14728, this test triggers an undefined behavior
 BOOST_AUTO_TEST_CASE(ipv4_peer_with_ipv6_addrMe_test)
 {
+
+ 
     // set up local addresses; all that's necessary to reproduce the bug is
     // that a normal IPv4 address is among the entries, but if this address is
     // !IsRoutable the undefined behavior is easier to trigger deterministically
+  
+  /*
     {
         LOCK(cs_mapLocalHost);
         in_addr ipv4AddrLocal;
@@ -206,6 +210,18 @@ BOOST_AUTO_TEST_CASE(ipv4_peer_with_ipv6_addrMe_test)
         lsi.nPort = 42;
         mapLocalHost[addr] = lsi;
     }
+  */
+  
+  // equivalent setting
+  LocalHostMap hostmap;
+
+    in_addr ipv4AddrLocal;
+    ipv4AddrLocal.s_addr = 0x0100007f;
+    CNetAddr addr_local = CNetAddr(ipv4AddrLocal);
+    CService cservice(addr_local,42);
+      
+    hostmap.AddLocal(cservice,true,23);
+
 
     // create a peer with an IPv4 address
     in_addr ipv4AddrPeer;
@@ -224,7 +240,7 @@ BOOST_AUTO_TEST_CASE(ipv4_peer_with_ipv6_addrMe_test)
     // before patch, this causes undefined behavior detectable with clang's -fsanitize=memory
     bool f_discover = true; // default value set in the application is: true
     bool f_listen = DEFAULT_LISTEN;
-    AdvertiseLocal(&*pnode, f_discover, f_listen);
+    hostmap.AdvertiseLocal(&*pnode, f_discover, f_listen);
 
     // suppress no-checks-run warning; if this test fails, it's by triggering a sanitizer
     BOOST_CHECK(1);
@@ -233,37 +249,42 @@ BOOST_AUTO_TEST_CASE(ipv4_peer_with_ipv6_addrMe_test)
 
 BOOST_AUTO_TEST_CASE(LimitedAndReachable_Network)
 {
-    BOOST_CHECK_EQUAL(IsReachable(NET_IPV4), true);
-    BOOST_CHECK_EQUAL(IsReachable(NET_IPV6), true);
-    BOOST_CHECK_EQUAL(IsReachable(NET_ONION), true);
 
-    SetReachable(NET_IPV4, false);
-    SetReachable(NET_IPV6, false);
-    SetReachable(NET_ONION, false);
+  LocalHostMap hostmap;
+  
+    BOOST_CHECK_EQUAL(hostmap.IsReachable(NET_IPV4), true);
+    BOOST_CHECK_EQUAL(hostmap.IsReachable(NET_IPV6), true);
+    BOOST_CHECK_EQUAL(hostmap.IsReachable(NET_ONION), true);
 
-    BOOST_CHECK_EQUAL(IsReachable(NET_IPV4), false);
-    BOOST_CHECK_EQUAL(IsReachable(NET_IPV6), false);
-    BOOST_CHECK_EQUAL(IsReachable(NET_ONION), false);
+    hostmap.SetReachable(NET_IPV4, false);
+    hostmap.SetReachable(NET_IPV6, false);
+    hostmap.SetReachable(NET_ONION, false);
 
-    SetReachable(NET_IPV4, true);
-    SetReachable(NET_IPV6, true);
-    SetReachable(NET_ONION, true);
+    BOOST_CHECK_EQUAL(hostmap.IsReachable(NET_IPV4), false);
+    BOOST_CHECK_EQUAL(hostmap.IsReachable(NET_IPV6), false);
+    BOOST_CHECK_EQUAL(hostmap.IsReachable(NET_ONION), false);
 
-    BOOST_CHECK_EQUAL(IsReachable(NET_IPV4), true);
-    BOOST_CHECK_EQUAL(IsReachable(NET_IPV6), true);
-    BOOST_CHECK_EQUAL(IsReachable(NET_ONION), true);
+    hostmap.SetReachable(NET_IPV4, true);
+    hostmap.SetReachable(NET_IPV6, true);
+    hostmap.SetReachable(NET_ONION, true);
+
+    BOOST_CHECK_EQUAL(hostmap.IsReachable(NET_IPV4), true);
+    BOOST_CHECK_EQUAL(hostmap.IsReachable(NET_IPV6), true);
+    BOOST_CHECK_EQUAL(hostmap.IsReachable(NET_ONION), true);
 }
 
 BOOST_AUTO_TEST_CASE(LimitedAndReachable_NetworkCaseUnroutableAndInternal)
 {
-    BOOST_CHECK_EQUAL(IsReachable(NET_UNROUTABLE), true);
-    BOOST_CHECK_EQUAL(IsReachable(NET_INTERNAL), true);
+  LocalHostMap hostmap;
+  
+    BOOST_CHECK_EQUAL(hostmap.IsReachable(NET_UNROUTABLE), true);
+    BOOST_CHECK_EQUAL(hostmap.IsReachable(NET_INTERNAL), true);
 
-    SetReachable(NET_UNROUTABLE, false);
-    SetReachable(NET_INTERNAL, false);
+    hostmap.SetReachable(NET_UNROUTABLE, false);
+    hostmap.SetReachable(NET_INTERNAL, false);
 
-    BOOST_CHECK_EQUAL(IsReachable(NET_UNROUTABLE), true); // Ignored for both networks
-    BOOST_CHECK_EQUAL(IsReachable(NET_INTERNAL), true);
+    BOOST_CHECK_EQUAL(hostmap.IsReachable(NET_UNROUTABLE), true); // Ignored for both networks
+    BOOST_CHECK_EQUAL(hostmap.IsReachable(NET_INTERNAL), true);
 }
 
 CNetAddr UtilBuildAddress(unsigned char p1, unsigned char p2, unsigned char p3, unsigned char p4)
@@ -281,13 +302,15 @@ BOOST_AUTO_TEST_CASE(LimitedAndReachable_CNetAddr)
 {
     CNetAddr addr = UtilBuildAddress(0x001, 0x001, 0x001, 0x001); // 1.1.1.1
 
-    SetReachable(NET_IPV4, true);
-    BOOST_CHECK_EQUAL(IsReachable(addr), true);
+    LocalHostMap hostmap;
+    
+    hostmap.SetReachable(NET_IPV4, true);
+    BOOST_CHECK_EQUAL(hostmap.IsReachable(addr), true);
 
-    SetReachable(NET_IPV4, false);
-    BOOST_CHECK_EQUAL(IsReachable(addr), false);
+    hostmap.SetReachable(NET_IPV4, false);
+    BOOST_CHECK_EQUAL(hostmap.IsReachable(addr), false);
 
-    SetReachable(NET_IPV4, true); // have to reset this, because this is stateful.
+    hostmap.SetReachable(NET_IPV4, true); // have to reset this, because this is stateful.
 }
 
 
@@ -295,16 +318,18 @@ BOOST_AUTO_TEST_CASE(LocalAddress_BasicLifecycle)
 {
     CService addr = CService(UtilBuildAddress(0x002, 0x001, 0x001, 0x001), 1000); // 2.1.1.1:1000
 
-    SetReachable(NET_IPV4, true);
+    LocalHostMap hostmap;
+    
+    hostmap.SetReachable(NET_IPV4, true);
 
-    BOOST_CHECK_EQUAL(IsLocal(addr), false);
+    BOOST_CHECK_EQUAL(hostmap.IsLocal(addr), false);
 
     bool f_discover = true; // default value set in the application is: true
-    BOOST_CHECK_EQUAL(AddLocal(addr, f_discover, 1000), true);
-    BOOST_CHECK_EQUAL(IsLocal(addr), true);
+    BOOST_CHECK_EQUAL(hostmap.AddLocal(addr, f_discover, 1000), true);
+    BOOST_CHECK_EQUAL(hostmap.IsLocal(addr), true);
 
-    RemoveLocal(addr);
-    BOOST_CHECK_EQUAL(IsLocal(addr), false);
+    hostmap.RemoveLocal(addr);
+    BOOST_CHECK_EQUAL(hostmap.IsLocal(addr), false);
 }
 
 

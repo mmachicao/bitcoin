@@ -1971,7 +1971,7 @@ bool static ProcessMessage(CNode* pfrom, const std::string& strCommand, CDataStr
 
         if (pfrom->fInbound && addrMe.IsRoutable())
         {
-            SeenLocal(addrMe);
+            connman->SeenLocal(addrMe);
         }
 
         // Be shy and don't send version until we hear
@@ -2019,13 +2019,13 @@ bool static ProcessMessage(CNode* pfrom, const std::string& strCommand, CDataStr
         {
             // Advertise our address
             if (connman->isListen() && !::ChainstateActive().IsInitialBlockDownload()) {
-                CAddress addr = GetLocalAddress(&pfrom->addr, pfrom->GetLocalServices(), connman->isListen());
+                CAddress addr = connman->GetLocalAddress(&pfrom->addr, pfrom->GetLocalServices());
                 FastRandomContext insecure_rand;
                 if (addr.IsRoutable())
                 {
                     LogPrint(BCLog::NET, "ProcessMessages: advertising address %s\n", addr.ToString());
                     pfrom->PushAddress(addr, insecure_rand);
-                } else if (IsPeerAddrLocalGood(pfrom, connman->isDiscover())) {
+                } else if (connman->IsPeerAddrLocalGood(pfrom)) {
                     addr.SetIP(addrMe);
                     LogPrint(BCLog::NET, "ProcessMessages: advertising address %s\n", addr.ToString());
                     pfrom->PushAddress(addr, insecure_rand);
@@ -2155,7 +2155,7 @@ bool static ProcessMessage(CNode* pfrom, const std::string& strCommand, CDataStr
                 addr.nTime = nNow - 5 * 24 * 60 * 60;
             pfrom->AddAddressKnown(addr);
             if (g_banman->IsBanned(addr)) continue; // Do not process banned addresses beyond remembering we received them
-            bool fReachable = IsReachable(addr);
+            bool fReachable = connman->IsReachable(addr);
             if (addr.nTime > nSince && !pfrom->fGetAddr && vAddr.size() <= 10 && addr.IsRoutable())
             {
                 // Relay to a limited number of other nodes
@@ -3567,7 +3567,7 @@ bool PeerLogicValidation::SendMessages(CNode* pto)
         // Address refresh broadcast
         int64_t nNow = GetTimeMicros();
         if (!::ChainstateActive().IsInitialBlockDownload() && pto->nNextLocalAddrSend < nNow) {
-            AdvertiseLocal(pto, connman->isDiscover(), connman->isListen());
+            connman->AdvertiseLocal(pto);
             pto->nNextLocalAddrSend = PoissonNextSend(nNow, AVG_LOCAL_ADDRESS_BROADCAST_INTERVAL);
         }
 

@@ -420,8 +420,8 @@ static UniValue GetNetworksInfo()
         UniValue obj(UniValue::VOBJ);
         GetProxy(network, proxy);
         obj.pushKV("name", GetNetworkName(network));
-        obj.pushKV("limited", !IsReachable(network));
-        obj.pushKV("reachable", IsReachable(network));
+        obj.pushKV("limited", !g_connman->IsReachable(network));
+        obj.pushKV("reachable", g_connman->IsReachable(network));
         obj.pushKV("proxy", proxy.IsValid() ? proxy.proxy.ToStringIPPort() : std::string());
         obj.pushKV("proxy_randomize_credentials", proxy.randomize_credentials);
         networks.push_back(obj);
@@ -489,7 +489,21 @@ static UniValue getnetworkinfo(const JSONRPCRequest& request)
     obj.pushKV("networks",      GetNetworksInfo());
     obj.pushKV("relayfee",      ValueFromAmount(::minRelayTxFee.GetFeePerK()));
     obj.pushKV("incrementalfee", ValueFromAmount(::incrementalRelayFee.GetFeePerK()));
+
     UniValue localAddresses(UniValue::VARR);
+
+    std::vector<std::pair<const CNetAddr, LocalServiceInfo>> addresses = g_connman->GetLocalAddresses();
+
+    for(const std::pair<const CNetAddr, LocalServiceInfo> &item : addresses)
+      {
+	UniValue rec(UniValue::VOBJ);
+	rec.pushKV("address", item.first.ToString());
+	rec.pushKV("port", item.second.nPort);
+	rec.pushKV("score", item.second.nScore);
+	localAddresses.push_back(rec);
+      }
+    
+    /*
     {
         LOCK(cs_mapLocalHost);
         for (const std::pair<const CNetAddr, LocalServiceInfo> &item : mapLocalHost)
@@ -501,6 +515,9 @@ static UniValue getnetworkinfo(const JSONRPCRequest& request)
             localAddresses.push_back(rec);
         }
     }
+
+    */
+    
     obj.pushKV("localaddresses", localAddresses);
     obj.pushKV("warnings",       GetWarnings("statusbar"));
     return obj;

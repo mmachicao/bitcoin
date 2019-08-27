@@ -38,6 +38,7 @@
 class CScheduler;
 class CNode;
 class BanMan;
+class LocalHostMap;
 
 /** Time between pings automatically sent out for latency probing and keepalive (in seconds). */
 static const int PING_INTERVAL = 2 * 60;
@@ -108,6 +109,12 @@ struct CSerializedNetMsg
     std::string command;
 };
 
+struct LocalServiceInfo {
+    int nScore;
+    int nPort;
+};
+
+
 
 class NetEventsInterface;
 class CConnman
@@ -132,6 +139,7 @@ public:
         CClientUIInterface* uiInterface = nullptr;
         NetEventsInterface* m_msgproc = nullptr;
         BanMan* m_banman = nullptr;
+      LocalHostMap* m_hostmap = nullptr;
         unsigned int nSendBufferMaxSize = 0;
         unsigned int nReceiveFloodSize = 0;
         uint64_t nMaxOutboundTimeframe = 0;
@@ -158,6 +166,7 @@ public:
         nBestHeight = connOptions.nBestHeight;
         clientInterface = connOptions.uiInterface;
         m_banman = connOptions.m_banman;
+	m_hostmap = connOptions.m_hostmap;
         m_msgproc = connOptions.m_msgproc;
         nSendBufferMaxSize = connOptions.nSendBufferMaxSize;
         nReceiveFloodSize = connOptions.nReceiveFloodSize;
@@ -249,11 +258,22 @@ public:
         post();
     };
 
+    // HostMap functions
+    bool SeenLocal(const CService& addr);
+    CAddress GetLocalAddress(const CNetAddr* paddrPeer, ServiceFlags nLocalServices);
+    bool IsPeerAddrLocalGood(CNode* pnode);
+    void AdvertiseLocal(CNode* pnode);
+    bool IsReachable(enum Network net);
+    bool IsReachable(const CNetAddr &addr);
+
+    std::vector<std::pair<const CNetAddr, LocalServiceInfo>> GetLocalAddresses();
+     
     // Addrman functions
     size_t GetAddressCount() const;
     void SetServices(const CService &addr, ServiceFlags nServices);
     void MarkAddressGood(const CAddress& addr);
     void AddNewAddresses(const std::vector<CAddress>& vAddr, const CAddress& addrFrom, int64_t nTimePenalty = 0);
+
     std::vector<CAddress> GetAddresses();
 
     // This allows temporarily exceeding nMaxOutbound, with the goal of finding
@@ -423,6 +443,7 @@ private:
     CClientUIInterface* clientInterface;
     NetEventsInterface* m_msgproc;
     BanMan* m_banman;
+    LocalHostMap* m_hostmap;
     bool m_f_discover = true;
     bool m_f_listen = DEFAULT_LISTEN;
     bool m_relay_txes = !DEFAULT_BLOCKSONLY;
@@ -456,7 +477,9 @@ private:
 };
 extern std::unique_ptr<CConnman> g_connman;
 extern std::unique_ptr<BanMan> g_banman;
-void Discover();
+extern std::unique_ptr<LocalHostMap> g_hostmap;
+
+void Discover(LocalHostMap *hostmap, bool f_discover);
 void StartMapPort();
 void InterruptMapPort();
 void StopMapPort();
@@ -508,26 +531,27 @@ enum
     LOCAL_MAX
 };
 
-bool IsPeerAddrLocalGood(CNode* pnode, bool f_discover);
-void AdvertiseLocal(CNode* pnode, bool f_discover, bool f_listen);
+
+//bool IsPeerAddrLocalGood(CNode* pnode, bool f_discover);
+//void AdvertiseLocal(CNode* pnode, bool f_discover, bool f_listen);
 
 /**
  * Mark a network as reachable or unreachable (no automatic connects to it)
  * @note Networks are reachable by default
  */
-void SetReachable(enum Network net, bool reachable);
+//void SetReachable(enum Network net, bool reachable);
 /** @returns true if the network is reachable, false otherwise */
-bool IsReachable(enum Network net);
+//bool IsReachable(enum Network net);
 /** @returns true if the address is in a reachable network, false otherwise */
-bool IsReachable(const CNetAddr& addr);
+//bool IsReachable(const CNetAddr& addr);
 
-bool AddLocal(const CService& addr, bool f_discover, int nScore = LOCAL_NONE);
-bool AddLocal(const CNetAddr& addr, bool f_discover, int nScore = LOCAL_NONE);
-void RemoveLocal(const CService& addr);
-bool SeenLocal(const CService& addr);
-bool IsLocal(const CService& addr);
-bool GetLocal(CService& addr, bool f_listen, const CNetAddr* paddrPeer = nullptr);
-CAddress GetLocalAddress(const CNetAddr* paddrPeer, ServiceFlags nLocalServices, bool f_listen);
+//bool AddLocal(const CService& addr, bool f_discover, int nScore = LOCAL_NONE);
+//bool AddLocal(const CNetAddr& addr, bool f_discover, int nScore = LOCAL_NONE);
+//void RemoveLocal(const CService& addr);
+//bool SeenLocal(const CService& addr);
+//bool IsLocal(const CService& addr);
+//bool GetLocal(CService& addr, bool f_listen, const CNetAddr* paddrPeer = nullptr);
+//CAddress GetLocalAddress(const CNetAddr* paddrPeer, ServiceFlags nLocalServices, bool f_listen);
 
 
 extern bool g_relay_txes;
@@ -535,13 +559,47 @@ extern bool g_relay_txes;
 /** Subversion as sent to the P2P network in `version` messages */
 extern std::string strSubVersion;
 
-struct LocalServiceInfo {
-    int nScore;
-    int nPort;
-};
 
-extern CCriticalSection cs_mapLocalHost;
-extern std::map<CNetAddr, LocalServiceInfo> mapLocalHost GUARDED_BY(cs_mapLocalHost);
+//extern CCriticalSection cs_mapLocalHost;
+//extern std::map<CNetAddr, LocalServiceInfo> mapLocalHost GUARDED_BY(cs_mapLocalHost);
+
+
+class LocalHostMap
+{
+ public:
+  bool IsPeerAddrLocalGood(CNode* pnode, bool f_discover);
+
+  void AdvertiseLocal(CNode* pnode, bool f_discover, bool f_listen);
+
+  /**
+   * Mark a network as reachable or unreachable (no automatic connects to it)
+   * @note Networks are reachable by default
+   */
+  void SetReachable(enum Network net, bool reachable);
+  /** @returns true if the network is reachable, false otherwise */
+  bool IsReachable(enum Network net);
+  /** @returns true if the address is in a reachable network, false otherwise */
+  bool IsReachable(const CNetAddr& addr);
+
+  bool AddLocal(const CService& addr, bool f_discover, int nScore = LOCAL_NONE);
+  bool AddLocal(const CNetAddr& addr, bool f_discover, int nScore = LOCAL_NONE);
+  void RemoveLocal(const CService& addr);
+  bool SeenLocal(const CService& addr);
+  bool IsLocal(const CService& addr);
+  bool GetLocal(CService& addr, bool f_listen, const CNetAddr* paddrPeer = nullptr);
+  CAddress GetLocalAddress(const CNetAddr* paddrPeer, ServiceFlags nLocalServices, bool f_listen);
+  
+  std::vector<std::pair<const CNetAddr, LocalServiceInfo>> GetLocalAddresses();
+  
+private:
+
+  CCriticalSection cs_local_host;
+  
+  bool m_f_limited[NET_MAX] GUARDED_BY(cs_local_host) = {};
+  std::map<CNetAddr, LocalServiceInfo> m_local_host GUARDED_BY(cs_local_host);
+
+  int GetnScore(const CService& addr);
+};
 
 extern const std::string NET_MESSAGE_COMMAND_OTHER;
 typedef std::map<std::string, uint64_t> mapMsgCmdSize; //command, total bytes
