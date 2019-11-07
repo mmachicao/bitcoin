@@ -2319,7 +2319,7 @@ void Discover(LocalHostMap* hostmap, bool f_discover)
         {
             for (const CNetAddr &addr : vaddr)
             {
-                if (AddLocal(addr, f_discover, LOCAL_IF))
+                if (hostmap->AddLocal(addr, f_discover, LOCAL_IF))
                     LogPrintf("%s: %s - %s\n", __func__, pszHostName, addr.ToString());
             }
         }
